@@ -1,0 +1,10 @@
+{
+  "node": {
+    "id": "envoy-test-node",
+    "cluster": "test-cluster",
+    "metadata": {
+      "environment": "development"
+    }
+  },
+  "resource_names": ["example-cluster"]
+}
