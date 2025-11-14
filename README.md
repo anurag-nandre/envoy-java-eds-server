@@ -80,10 +80,28 @@ This project implements a simple EDS server that:
 
 ### Running the Server
 
+#### Run with both gRPC and Dropwizard servers (integrated mode):
+
 ```bash
 mvn clean package
-java -jar target/envoyjavaedsserver-1.0-SNAPSHOT-jar-with-dependencies.jar [port]
+java -jar target/envoyjavaedsserver-1.0-SNAPSHOT-jar-with-dependencies.jar server config.yml
 ```
+
+This will start:
+- Dropwizard web server on port 8080
+- Dropwizard admin server on port 8081
+- gRPC EDS server on port 18000 (configurable in config.yml)
+
+The Dropwizard application manages both servers as a single process, providing health checks and lifecycle management.
+
+#### Run in standalone gRPC mode:
+
+```bash
+mvn clean package
+java -jar target/envoyjavaedsserver-1.0-SNAPSHOT-jar-with-dependencies.jar standalone --port [PORT]
+```
+
+This will only start the gRPC server without the Dropwizard web server. The port defaults to 18000 if not specified.
 
 ### Adding/Removing Endpoints Programmatically
 
@@ -161,4 +179,20 @@ To expand this project:
 - [Data Plane API](https://github.com/envoyproxy/data-plane-api)
 - [Envoy Control Plane for Java](https://github.com/envoyproxy/java-control-plane)
 
+```
 grpcurl -protoset envoy_full.proto -d @ <req.json -plaintext 127.0.0.1:18000 envoy.service.endpoint.v3.EndpointDiscoveryService.StreamEndpoints
+```
+
+## Health Check Endpoints
+
+The Dropwizard admin interface provides a health check endpoint at:
+
+```
+http://localhost:8081/healthcheck
+```
+
+This returns a JSON response with the health status of the service:
+
+```json
+{"service":{"healthy":true}}
+```

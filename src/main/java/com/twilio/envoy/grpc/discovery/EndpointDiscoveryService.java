@@ -1,6 +1,7 @@
-package com.twilio.envoyjavaedsserver;
+package com.twilio.envoy.grpc.discovery;
 
 import com.google.protobuf.Any;
+import com.twilio.envoy.grpc.model.ServiceEndpoint;
 import io.envoyproxy.envoy.config.core.v3.Address;
 import io.envoyproxy.envoy.config.core.v3.SocketAddress;
 import io.envoyproxy.envoy.config.endpoint.v3.ClusterLoadAssignment;
@@ -19,49 +20,25 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-public class EndpointDiscoveryServiceImpl extends EndpointDiscoveryServiceGrpc.EndpointDiscoveryServiceImplBase {
-    private static final Logger logger = LoggerFactory.getLogger(EndpointDiscoveryServiceImpl.class);
+/**
+ * Implementation of Envoy's Endpoint Discovery Service (EDS) gRPC API.
+ * <p>
+ * This service allows Envoy proxies to dynamically discover endpoints for configured clusters.
+ * It supports streaming updates, on-demand endpoint registration/removal, and version-based caching.
+ */
+public class EndpointDiscoveryService extends EndpointDiscoveryServiceGrpc.EndpointDiscoveryServiceImplBase {
+    private static final Logger logger = LoggerFactory.getLogger(EndpointDiscoveryService.class);
     private final AtomicInteger versionCounter = new AtomicInteger(1);
     
     // Store endpoints by cluster name
     private final Map<String, List<ServiceEndpoint>> endpoints = new ConcurrentHashMap<>();
 
-    Map<String,DiscoveryResponse> versionedDiscoveryResponseMap = new ConcurrentHashMap<>();
+    // Cache for versioned discovery responses
+    private final Map<String, DiscoveryResponse> versionedDiscoveryResponseMap = new ConcurrentHashMap<>();
     
     // Keep track of all active streams for pushing updates
     private final Set<StreamObserver<DiscoveryResponse>> activeStreams = ConcurrentHashMap.newKeySet();
     
-    /**
-     * Represents a service endpoint
-     */
-    public static class ServiceEndpoint {
-        private final String host;
-        private final int port;
-        private final Map<String, String> metadata;
-        
-        public ServiceEndpoint(String host, int port) {
-            this(host, port, new HashMap<>());
-        }
-        
-        public ServiceEndpoint(String host, int port, Map<String, String> metadata) {
-            this.host = host;
-            this.port = port;
-            this.metadata = metadata;
-        }
-        
-        public String getHost() {
-            return host;
-        }
-        
-        public int getPort() {
-            return port;
-        }
-        
-        public Map<String, String> getMetadata() {
-            return metadata;
-        }
-    }
-
     @Override
     public StreamObserver<DiscoveryRequest> streamEndpoints(StreamObserver<DiscoveryResponse> responseObserver) {
         logger.info("Received streamEndpoints request");
@@ -115,29 +92,6 @@ public class EndpointDiscoveryServiceImpl extends EndpointDiscoveryServiceGrpc.E
         };
     }
 
-//    @Override
-//    public StreamObserver<DiscoveryRequest> deltaEndpoints(StreamObserver<io.envoyproxy.envoy.service.discovery.v3.DeltaDiscoveryResponse> responseObserver) {
-//        logger.info("Received deltaEndpoints request - Delta xDS not implemented");
-//
-//        return new StreamObserver<DiscoveryRequest>() {
-//            @Override
-//            public void onNext(DiscoveryRequest value) {
-//                logger.error("Delta xDS not supported by this implementation");
-//            }
-//
-//            @Override
-//            public void onError(Throwable t) {
-//                logger.error("Error in deltaEndpoints", t);
-//            }
-//
-//            @Override
-//            public void onCompleted() {
-//                logger.info("deltaEndpoints completed");
-//                responseObserver.onCompleted();
-//            }
-//        };
-//    }
-
     @Override
     public void fetchEndpoints(DiscoveryRequest request, StreamObserver<DiscoveryResponse> responseObserver) {
         logger.info("Received fetchEndpoints request");
@@ -146,39 +100,36 @@ public class EndpointDiscoveryServiceImpl extends EndpointDiscoveryServiceGrpc.E
     }
 
     private DiscoveryResponse generateResponse(DiscoveryRequest request) {
+        // Check if we have a cached response for this version
+        if (!request.getVersionInfo().isEmpty()) {
+            logger.info("Request has version info: {}", request.getVersionInfo());
+            if (versionedDiscoveryResponseMap.containsKey(request.getVersionInfo())) {
+                DiscoveryResponse response = versionedDiscoveryResponseMap.get(request.getVersionInfo());
+                logger.info("Returning cached response for version: {}", request.getVersionInfo());
+                return response;
+            } else {
+                logger.info("No cached response for version: {}, generating new response", request.getVersionInfo());
+            }
+        }
+        
+        // Generate a new response
+        String version = String.valueOf(versionCounter.getAndIncrement());
+        String nonce = UUID.randomUUID().toString();
 
+        DiscoveryResponse.Builder responseBuilder = DiscoveryResponse.newBuilder()
+                .setVersionInfo(version)
+                .setNonce(nonce)
+                .setTypeUrl(request.getTypeUrl());
 
-          if(!request.getVersionInfo().isEmpty()&&request.getVersionInfo()!=null){
-                logger.info("Request has version info: {}", request.getVersionInfo());
-                if(versionedDiscoveryResponseMap.containsKey(request.getVersionInfo())){
-
-                    DiscoveryResponse response = versionedDiscoveryResponseMap.get(request.getVersionInfo());
-
-                    logger.info("Returning cached response for version: {}", request.getVersionInfo());
-                    return response;
-                } else {
-                    logger.info("No cached response for version: {}, generating new response", request.getVersionInfo());
-                }
-          }else {
-
-              String version = String.valueOf(versionCounter.getAndIncrement());
-              String nonce = UUID.randomUUID().toString();
-
-              DiscoveryResponse.Builder responseBuilder = DiscoveryResponse.newBuilder()
-                      .setVersionInfo(version)
-                      .setNonce(nonce)
-                      .setTypeUrl(request.getTypeUrl());
-
-              // Add requested endpoints
-              for (String resourceName : request.getResourceNamesList()) {
-                  ClusterLoadAssignment cla = createClusterLoadAssignment(resourceName);
-                  responseBuilder.addResources(Any.pack(cla));
-              }
-              responseBuilder.setTypeUrl(request.getTypeUrl());
-              versionedDiscoveryResponseMap.put(version, responseBuilder.build());
-              return responseBuilder.build();
-          }
-          return   null;
+        // Add requested endpoints
+        for (String resourceName : request.getResourceNamesList()) {
+            ClusterLoadAssignment cla = createClusterLoadAssignment(resourceName);
+            responseBuilder.addResources(Any.pack(cla));
+        }
+        
+        DiscoveryResponse response = responseBuilder.build();
+        versionedDiscoveryResponseMap.put(version, response);
+        return response;
     }
 
     private ClusterLoadAssignment createClusterLoadAssignment(String clusterName) {

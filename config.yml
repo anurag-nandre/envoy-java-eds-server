@@ -1,0 +1,22 @@
+server:
+  # tune down some since this is a local service with limited heap
+  maxThreads: 256 # default: 1024. on a 32-core box: needed(acceptors=32 + selectors=64 + request=1)
+  maxQueuedRequests: 256 # default: 1024
+  adminMaxThreads: 65 # default: 64. a 64-core box (i3.16xl) needs 64 workers, 1 acceptor
+
+  applicationConnectors:
+    - type: http
+      port: 9990
+      useForwardedHeaders: false
+  adminConnectors:
+    - type: http
+      port: 9991
+      useForwardedHeaders: false
+
+  requestLog:
+    appenders:
+      - type: console
+        timeZone: UTC
+
+
+grpcPort: 9996
